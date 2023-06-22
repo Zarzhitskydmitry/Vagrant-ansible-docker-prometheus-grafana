@@ -350,54 +350,54 @@ WantedBy=multi-user.target        # на каком загрузочном та�
 
 ```bash
 ---
-- block: #====BLOCK INSTALL DOCKER AND DOCKER-COMPOSE FOR UBUNTU====
-    - name: Install aptitude using apt
+- block: #====BLOCK INSTALL DOCKER AND DOCKER-COMPOSE FOR UBUNTU====    создаем блок, что мы будем здесь выполнять
+    - name: Install aptitude using apt        # даем имя и с помощью apt устанавливаем пакет aptitude и также обновляем наш репозиторий
       apt:
         name=aptitude 
         state=latest 
         update_cache=yes 
         force_apt_get=yes
 
-    - name: Install required system packages
+    - name: Install required system packages        # здесь мы указываем какие пакеты для работы нам необходимы, такие как python, https, curl и т.п.
       apt: name={{ item }} state=latest update_cache=yes
       loop: [ 'apt-transport-https', 'ca-certificates', 'curl', 'software-properties-common', 'python3-pip', 'virtualenv', 'python3-setuptools' ]
 
-    - name: Add Docker GPG apt Key
+    - name: Add Docker GPG apt Key        # тут мы получаем gpg ключ для установки докера
       apt_key:
         url: https://download.docker.com/linux/ubuntu/gpg
         state: present
 
-    - name: Add Docker Repository
+    - name: Add Docker Repository        # добавляем репозиторий в систему и обновляем его
       apt_repository:
         repo: deb https://download.docker.com/linux/ubuntu focal stable
         state: present
         update_cache: yes
 
-    - name: Update apt and install docker-ce
+    - name: Update apt and install docker-ce    # наконец устанавливаем docker-ce, docker-ce-cli, containerd.io и docker-buildx-plugin
       apt: name={{ item }} state=latest
       loop: ['docker-ce','docker-ce-cli','containerd.io','docker-buildx-plugin']
 
-    - name: Install docker-compose
+    - name: Install docker-compose    # скачиваем docker-compose и помещаем его в /usr/local/bin/docker-compose назначая для него права выполнения
       get_url: 
         url : https://github.com/docker/compose/releases/download/1.25.1-rc1/docker-compose-Linux-x86_64
         dest: /usr/local/bin/docker-compose
         mode: 'u+x,g+x'
 
-    - name: Install Docker Module for Python
+    - name: Install Docker Module for Python    # теперь устанавливаем docker и docker-compose
       pip:
         name={{ item }}
       loop: ['docker','docker-compose']
 
-    - name: check docker is active
+    - name: check docker is active        # проверяем все ли работает(проверяем сервис)
       service: name=docker state=started enabled=yes
 
-- block: #====BLOCK INSTALL NODE-EXPORTER FOR UBUNTU====
-    - name: check if node exporter exist
+- block: #====BLOCK INSTALL NODE-EXPORTER FOR UBUNTU====    тут идет блок инсталяции node-exporter
+    - name: check if node exporter exist        # проверяем node_exporter на наличие в системе и выдаем результат
       stat:
         path: "{{ node_exporter_bin }}"
       register: __check_node_exporter_present
 
-    - name: create node exporter user
+    - name: create node exporter user        # создаем пользователся node_exporter без фхоа и папки
       user:
         name: "{{ node_exporter_user }}"
         append: true
@@ -405,27 +405,27 @@ WantedBy=multi-user.target        # на каком загрузочном та�
         system: true
         create_home: false
 
-    - name: create node exporter config dir
+    - name: create node exporter config dir        # Создаем конфигурационную папку наследуя все параметры из vars
       file:
         path: "{{ node_exporter_dir_conf }}"
         state: directory
         owner: "{{ node_exporter_user }}"
         group: "{{ node_exporter_group }}"
 
-    - name: if node exporter exist get version
+    - name: if node exporter exist get version        # просматриваем версию node_exporter если он есть
       shell: "cat /etc/systemd/system/node_exporter.service | grep Version | sed s/'.*Version '//g"
       when: __check_node_exporter_present.stat.exists == true
       changed_when: false
       register: __get_node_exporter_version
       
-    - name: download and unzip node exporter if not exist
+    - name: download and unzip node exporter if not exist        # скачиваем сам node_exporter, распаковываем и помещаем его в /tmp/ на виртуальную машину
       unarchive:
         src: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
         dest: /tmp/
         remote_src: yes
         validate_certs: no
 
-    - name: move the binary to the final destination
+    - name: move the binary to the final destination    # теперь перемещаем этот в файл в /usr/local/bin/node_exporter если его не было в системе или не совпадают версии с правами 0755
       copy:
         src: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
         dest: "{{ node_exporter_bin }}"
@@ -435,25 +435,26 @@ WantedBy=multi-user.target        # на каком загрузочном та�
         remote_src: yes
       when: __check_node_exporter_present.stat.exists == false or not __get_node_exporter_version.stdout == node_exporter_version
 
-    - name: clean
+    - name: clean    # удаляем наш скачанный архив
       file:
         path: /tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/
         state: absent
 
-    - name: install service
+    - name: install service    # устанавливаем наш сервис, тут мы не указываем путь откуда взять т.к. ansible уже знает где взять template
       template:
-        src: node_exporter.service.j2
+        src: node_exporter.service.j2    # формат jinja2 позволяет внутри такого файла ссылаться на переменные playbook в отличии от отбычного файла, там такой возможности нет
         dest: /etc/systemd/system/node_exporter.service
         owner: root
         group: root
         mode: 0755
-      notify: reload_daemon_and_restart_node_exporter
+      notify: reload_daemon_and_restart_node_exporter    # при изменении файла наш node_exporter будет перезапущен
       
-    - meta: flush_handlers
-    - name: service always started
+    - meta: flush_handlers    # это особый вид задач, которые могут влиять на внутреннее выполнение или состояние Ansible.
+    
+    - name: service always started            # И теперь просто запускаем наш node_exporter
       systemd: name=node_exporter state=started enabled=yes
 
-- block: #====DOCKER-COMPOSE FILE PROMETHEUS/GRAFANA====
+- block: #====DOCKER-COMPOSE FILE PROMETHEUS/GRAFANA====    в этом блоке мы копируем наши файлы на виртуальную машину для выполнения docker-compose
     - name: copy compose file
       copy:
         src=docker-compose.yml
@@ -479,27 +480,15 @@ WantedBy=multi-user.target        # на каком загрузочном та�
         mode: 0755
       notify: restart_docker_compose
 
-- block: #====DOCKER-COMPOSE UP====
+- block: #====DOCKER-COMPOSE UP====    и последнее мы просто собираем наш compose файл
     - name: deploy docker-compose stack
       community.docker.docker_compose:
         project_src: /home
         files: docker-compose.yml
         recreate: always
-
 ```
-Quick Start
-===========
 
-Our Wiki contains an `Introduction to the API <https://github.com/python-telegram-bot/python-telegram-bot/wiki/Introduction-to-the-API>`_ explaining how the pure Bot API can be accessed via ``python-telegram-bot``.
-Moreover, the `Tutorial: Your first Bot <https://github.com/python-telegram-bot/python-telegram-bot/wiki/Extensions-%E2%80%93-Your-first-Bot>`_ gives an introduction on how chatbots can be easily programmed with the help of the ``telegram.ext`` module.
+Finish!!!
+==========
 
-Resources
-=========
-
-- The `package documentation <https://docs.python-telegram-bot.org/>`_ is the technical reference for ``python-telegram-bot``.
-  It contains descriptions of all available classes, modules, methods and arguments as well as the `changelog <https://docs.python-telegram-bot.org/changelog.html>`_.
-- The `wiki <https://github.com/python-telegram-bot/python-telegram-bot/wiki/>`_ is home to number of more elaborate introductions of the different features of ``python-telegram-bot`` and other useful resources that go beyond the technical documentation.
-- Our `examples section <https://docs.python-telegram-bot.org/examples.html>`_ contains several examples that showcase the different features of both the Bot API and ``python-telegram-bot``.
-  Even if it is not your approach for learning, please take a look at ``echobot.py``. It is the de facto base for most of the bots out there.
-  The code for these examples is released to the public domain, so you can start by grabbing the code and building on top of it.
-- The `official Telegram Bot API documentation <https://core.telegram.org/bots/api>`_ is of course always worth a read.
+По итогу мы создали виртуальную машину на которой были установлены docker, docker-compose, node_exporter и был собран compose файл где настроены prometheus и grafana вместе, уже собирают метрики и визуализируют это все.
