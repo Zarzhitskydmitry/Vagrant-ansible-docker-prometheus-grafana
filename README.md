@@ -209,7 +209,9 @@ scrape_configs:        # здесь находится конфигурация 
  ```
 Немного пояснения
 ```bash
-{{ ansible_host }} - это ссылка в ansible, то есть указывает что, подставить сюда из самого playbook, данная команда значит взять из hosts.txt указанный нами ip адрес узла. Все такие переменные указываются в двойных фигурных скобках "{{ }}"
+{{ ansible_host }} - это ссылка в ansible, то есть указывает что, подставить сюда из самого playbook, 
+данная команда значит взять из hosts.txt указанный нами ip адрес узла. 
+Все такие переменные указываются в двойных фигурных скобках "{{ }}"
  ```
 
 prometheus_ds.yml.j2
@@ -268,17 +270,223 @@ test-
                         vars-
                             -main.yml
 
-Каждая папка отвечает за свои методы взаимодействия всего плейбука, подробности тут: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html            
+Каждая папка отвечает за свои методы взаимодействия всего плейбука. 
+подробности тут: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html            
 ```
 
-Для начала мы сразу закинем наши файлы prometheus.yml.j2 и prometheus_ds.yml.j2 в папку roles/ansible_vagrant/templates/
+Для начала мы сразу закинем наши файлы prometheus.yml.j2 и prometheus_ds.yml.j2 в папку roles/ansible_vagrant/templates/, а файл docker-compose.yml в папку roles/ansible_vagrant/files/
 
     $ mv prometheus.yml.j2 roles/ansible_vagrant/templates/
     $ mv prometheus_ds.yml.j2 roles/ansible_vagrant/templates/
+    $ mv docker-compose.yml roles/ansible_vagrant/files/
 
-Ansible-galaxy
-==========
+Теперь приступи к написанию плейбука, который будет запускать наши роли создаем файл ansible_vagrant_playbook.yml
 
+    $ nano ansible_vagrant_playbook.yml
+
+И записываем туда:
+```bash
+- name: Install docker,docker-compose and node-exporter        # название которое несет весь плейбук
+  hosts: all        # здесь указываются хосты, группы или группа хостов на которые будут производиться все возможны манипуляции
+  become: yes        # Говорим ansible, чтобы он использовал авторизацию для получения прав работы над системой
+  ignore_errors: yes        # так же игнорируем все ошибки, которые могут возникнуть в процессе плейбука, чтобы он не завершал работу, а дошел до конца
+
+  roles:        # говорим ansible, что бы хотим запустить роль
+    - ansible_vagrant        # и название роли
+```
+
+Сохраняем и идем изменять файл с переменными он находится в roles/ansible_vagrant/vars/main.yml
+Эти переменные будут вызываться в теле нашего основного файла, где будут проходить все манипуляции
+
+    $ nano roles/ansible_vagrant/vars/main.yml
+
+```bash
+---
+ansible_user: admin        # для авторизации используем имя пользователя
+ansible_become_password: admin    # и такой пароль
+node_exporter_version: "1.1.2"    # используем версию node-exporter 1.1.2
+node_exporter_bin: /usr/local/bin/node_exporter    # переменная директории node_exporter
+node_exporter_user: node-exporter        # имя пользователя node_exporter
+node_exporter_group: "{{ node_exporter_user }}" # название группы наследуем из node_exporter_user
+node_exporter_dir_conf: /etc/node_exporter # местоположение конфигурационного файла node_exporter
+...
+```
+
+Дальше мы добавим handlers, команды которые находится здесь вызываются, только тогда когда происходит изменение файла или команды или цикл команд.
+Давайте изменим его и внесем наши команды, он содерится тут: roles\ansible_vagrant\handlers\main.yml:
+
+    $ nano roles\ansible_vagrant\handlers\main.yml
+
+```bash
+---
+- name: reload_daemon_and_restart_node_exporter        # название handler'a по которому мы будем его вызывать
+  service: name=node_exporter state=restarted daemon_reload=yes enabled=yes    # здесь мы указываем. что нужно service с названием node_exporter перезагрузить
+
+- name: restart_docker_compose            # название handler'a по которому мы будем его вызывать
+  community.docker.docker_compose: project_src=/home restarted=true        # указываем, что будем перезагружать docker-compose файл в местоположении /home перезагружать
+```
+
+Давайте сразу напишем файл node_exporter.service, чтобы он включался и оставим его в местоположении roles\ansible_vagrant\templates\node_exporter.service.j2.
+
+    $ nano roles\ansible_vagrant\templates\node_exporter.service.j2
+
+```bash
+[Unit]
+Description=Node Exporter Version {{ node_exporter_version }}        # Добавляем описание службе
+After=network-online.target        # Это гарантирует, что обычные сервисные единицы выполняют базовую инициализацию системы и завершаются корректно до завершения работы системы
+[Service]            # указываем на службу
+User={{ node_exporter_user }}        # от какого пользователя будет работать служба
+Group={{ node_exporter_user }}        # и принадлежность группы пользователей
+Type=simple            # тип установим в simple, это если диспетчер служб запустит службу после того, как основной процесс службы был остановлен
+ExecStart={{ node_exporter_bin }}        # Наследуем местоположение из vars что запустить
+[Install]        #    устанавливаем зависимость
+WantedBy=multi-user.target        # на каком загрузочном таргете запускать этот юнит - многопользовательский режим
+```
+
+Сохраняем и остался последний, но не менее важный файл roles\ansible_vagrant\tasks\main.yml. Здесь хранится все тело нашего скрипта, что ему выполнять по нашему запросу.
+Приступим:
+
+    $ nano roles\ansible_vagrant\tasks\main.yml
+
+```bash
+---
+- block: #====BLOCK INSTALL DOCKER AND DOCKER-COMPOSE FOR UBUNTU====
+    - name: Install aptitude using apt
+      apt:
+        name=aptitude 
+        state=latest 
+        update_cache=yes 
+        force_apt_get=yes
+
+    - name: Install required system packages
+      apt: name={{ item }} state=latest update_cache=yes
+      loop: [ 'apt-transport-https', 'ca-certificates', 'curl', 'software-properties-common', 'python3-pip', 'virtualenv', 'python3-setuptools' ]
+
+    - name: Add Docker GPG apt Key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu focal stable
+        state: present
+        update_cache: yes
+
+    - name: Update apt and install docker-ce
+      apt: name={{ item }} state=latest
+      loop: ['docker-ce','docker-ce-cli','containerd.io','docker-buildx-plugin']
+
+    - name: Install docker-compose
+      get_url: 
+        url : https://github.com/docker/compose/releases/download/1.25.1-rc1/docker-compose-Linux-x86_64
+        dest: /usr/local/bin/docker-compose
+        mode: 'u+x,g+x'
+
+    - name: Install Docker Module for Python
+      pip:
+        name={{ item }}
+      loop: ['docker','docker-compose']
+
+    - name: check docker is active
+      service: name=docker state=started enabled=yes
+
+- block: #====BLOCK INSTALL NODE-EXPORTER FOR UBUNTU====
+    - name: check if node exporter exist
+      stat:
+        path: "{{ node_exporter_bin }}"
+      register: __check_node_exporter_present
+
+    - name: create node exporter user
+      user:
+        name: "{{ node_exporter_user }}"
+        append: true
+        shell: /usr/sbin/nologin
+        system: true
+        create_home: false
+
+    - name: create node exporter config dir
+      file:
+        path: "{{ node_exporter_dir_conf }}"
+        state: directory
+        owner: "{{ node_exporter_user }}"
+        group: "{{ node_exporter_group }}"
+
+    - name: if node exporter exist get version
+      shell: "cat /etc/systemd/system/node_exporter.service | grep Version | sed s/'.*Version '//g"
+      when: __check_node_exporter_present.stat.exists == true
+      changed_when: false
+      register: __get_node_exporter_version
+      
+    - name: download and unzip node exporter if not exist
+      unarchive:
+        src: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+        validate_certs: no
+
+    - name: move the binary to the final destination
+      copy:
+        src: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
+        dest: "{{ node_exporter_bin }}"
+        owner: "{{ node_exporter_user }}"
+        group: "{{ node_exporter_group }}"
+        mode: 0755
+        remote_src: yes
+      when: __check_node_exporter_present.stat.exists == false or not __get_node_exporter_version.stdout == node_exporter_version
+
+    - name: clean
+      file:
+        path: /tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/
+        state: absent
+
+    - name: install service
+      template:
+        src: node_exporter.service.j2
+        dest: /etc/systemd/system/node_exporter.service
+        owner: root
+        group: root
+        mode: 0755
+      notify: reload_daemon_and_restart_node_exporter
+      
+    - meta: flush_handlers
+    - name: service always started
+      systemd: name=node_exporter state=started enabled=yes
+
+- block: #====DOCKER-COMPOSE FILE PROMETHEUS/GRAFANA====
+    - name: copy compose file
+      copy:
+        src=docker-compose.yml
+        dest=/home
+        mode=0775
+      notify: restart_docker_compose
+
+    - name: prometheus file
+      template:
+        src: prometheus.yml.j2
+        dest: /home/prometheus.yml
+        owner: root
+        group: root
+        mode: 0755
+      notify: restart_docker_compose
+
+    - name: prometheus file datasource
+      template:
+        src: prometheus_ds.yml.j2
+        dest: /home/prometheus_ds.yml
+        owner: root
+        group: root
+        mode: 0755
+      notify: restart_docker_compose
+
+- block: #====DOCKER-COMPOSE UP====
+    - name: deploy docker-compose stack
+      community.docker.docker_compose:
+        project_src: /home
+        files: docker-compose.yml
+        recreate: always
+
+```
 Quick Start
 ===========
 
