@@ -1,0 +1,6 @@
+---
+- name: reload_daemon_and_restart_node_exporter
+  service: name=node_exporter state=restarted daemon_reload=yes enabled=yes
+
+- name: restart_docker_compose
+  community.docker.docker_compose: project_src=/home restarted=true

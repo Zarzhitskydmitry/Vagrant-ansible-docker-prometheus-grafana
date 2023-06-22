@@ -1,0 +1,7 @@
+- name: Install docker,docker-compose and node-exporter
+  hosts: all
+  become: yes
+  ignore_errors: yes
+
+  roles:
+    - ansible_vagrant

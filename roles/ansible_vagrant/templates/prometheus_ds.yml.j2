@@ -1,0 +1,6 @@
+datasources:
+- name: Prometheus
+  access: proxy
+  type: prometheus
+  url: http://{{ ansible_host }}:9090
+  isDefault: true
