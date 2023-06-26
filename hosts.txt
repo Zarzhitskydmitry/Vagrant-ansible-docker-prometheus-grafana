@@ -1,7 +1,8 @@
 [pc]
-192.168.0.197 
+192.168.0.196
 
 [pc:vars]
-ansible_user=ubuntudoc
-ansible_become_password=Ntvysqktc1723
-ansible_ssh_private_key_file=/home/ubuntudoc/.ssh/id_rsa
+ansible_ssh_user=vagrant
+ansible_port=22
+ansible_become_password=vagrant
+ansible_ssh_private_key_file='/home/ubuntudoc/testovoe/.vagrant/machines/testing/virtualbox/private_key'
